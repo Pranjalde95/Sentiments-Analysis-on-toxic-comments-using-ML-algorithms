@@ -1,0 +1,259 @@
+import numpy as np
+import pandas as pd
+import datetime as dt
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pingouin as pg
+import scipy.stats as stats
+import statsmodels.formula.api as smf
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.model_selection import train_test_split, KFold, cross_val_score, GridSearchCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import NMF
+from sklearn.metrics import confusion_matrix, accuracy_score, classification_report, roc_curve, roc_auc_score
+#
+comments = pd.read_csv('youtoxic_english_1000.csv')
+comments
+#
+comments.info()
+comments.isna().sum()
+#
+comments['words'] = comments['Text'].str.split(r'[@|#|,|.|/|"|\s+]')
+comments['words']
+#
+timport matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
+
+columns_names = comments.columns.tolist()
+bar_data = {}
+for name in columns_names[1:]:
+    bar_data[name] = len(comments.loc[comments[name] == 1]) / len(comments[name])
+
+bar_name = list(bar_data.keys())
+values = list(bar_data.values())
+fig = plt.figure(figsize = (20, 12))
+colors = plt.cm.Paired(np.arange(12))
+
+plt.bar(bar_name, values, color = colors,
+        width = 0.4)
+plt.xticks(fontsize=12)
+plt.yticks(fontsize=15)
+plt.xlabel("Feature Name", fontsize=15)
+plt.ylabel("Abundance ratio", fontsize=15)
+#plt.title("Percentage of each feature from all comments", fontsize=30)
+patch = [mpatches.Patch(color=color, label=f"{bar_name} - {value*100}%")
+         for color,value, bar_name in zip(colors, values, bar_name)]
+plt.legend(handles=patch, fontsize=13)
+plt.grid()
+plt.show()
+#
+racist_word_count = comments[comments['IsRacist'] == True]['words'].explode().value_counts()
+racist_word_count = racist_word_count.reset_index().rename(columns = {'index':'words', 'words':'counts'})
+racist_word_count = racist_word_count[racist_word_count['words'].str.len() >= 4]
+racist_word_count.head(20)
+#
+racist_word_count['words'] = racist_word_count['words'].str.lower()
+racist_word_count.loc[racist_word_count['words'] == 'blacks', 'words'] = 'black'
+racist_word_count = racist_word_count.groupby('words', as_index = False)['counts'].sum().sort_values('counts', ascending = False)
+racist_word_count.head(10)
+#
+comments['Text'] = comments['Text'].str.lower()
+comments['word_black'] = np.where(comments['Text'].str.contains('black'), True, False)
+comments[['Text', 'IsRacist', 'word_black']]
+#
+black_racist = comments.groupby('IsRacist', as_index = True)['word_black'].value_counts(normalize = True)
+black_racist = black_racist.unstack()
+black_racist.plot(kind = 'bar', stacked = True, color = sns.color_palette('Purples', 2))
+plt.title('Association between comments which are racism and "black" words in each comment.')
+plt.show()
+#
+black_racist_ct = pd.crosstab(comments['word_black'], comments['IsRacist'])
+black_racist_ct = black_racist_ct.sort_index(axis = 0, ascending = False)
+black_racist_ct = black_racist_ct.sort_index(axis = 1, ascending = False)
+black_racist_ct
+#
+expected, observed, chi_stats = pg.chi2_independence(data = comments, x = 'IsRacist', y = 'word_black')
+chi_stats
+#
+toxic = comments[['Text', 'IsToxic']]
+toxic
+#
+vec = TfidfVectorizer()
+tfidf_matrix = vec.fit_transform(toxic['Text'])
+
+print('Vocabulary :')
+print(vec.get_feature_names_out())
+
+print('TF-IDF Matrix Shape :')
+print(tfidf_matrix.shape)
+#
+dense_tfidf_matrix = tfidf_matrix.toarray()
+print('TF-IDF Matrix Array :')
+print(dense_tfidf_matrix)
+#
+dense_tfidf_matrix = pd.DataFrame(dense_tfidf_matrix, columns = vec.get_feature_names_out())
+dense_tfidf_matrix
+#
+toxic_vectorized = pd.concat([toxic, dense_tfidf_matrix], axis = 1)
+toxic_vectorized
+#
+X = toxic_vectorized.drop(['Text', 'IsToxic'], axis = 1)
+y = toxic_vectorized['IsToxic']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, stratify = y, random_state = 123)
+#
+kf = KFold(n_splits = 5, shuffle = True, random_state = 123)
+#
+knn = KNeighborsClassifier()
+knn_param = {'n_neighbors':np.arange(1, 21)}
+knn_cv = GridSearchCV(knn, param_grid = knn_param, cv = kf)
+knn_cv.fit(X_train, y_train)
+
+print("Tuned KNN paramaters: {}".format(knn_cv.best_params_))
+print("Tuned KNN score: {}".format(knn_cv.best_score_))
+#
+logreg = LogisticRegression(penalty = 'l2')
+logreg_param = {'C':[0.001, 0.01, 0.1, 1, 10]}
+logreg_cv = GridSearchCV(logreg, param_grid = logreg_param, cv = kf)
+logreg_cv.fit(X_train, y_train)
+
+print('Tuned Logistic Regression parameters: {}'.format(logreg_cv.best_params_))
+print('Tuned Logistic Regression score : {}'.format(logreg_cv.best_score_))
+#
+svc = SVC()
+svc_param = {'kernel':['linear', 'rbf'], 'C':[0.1, 1.0, 10], 'gamma':np.linspace(0.00001, 10, num = 7)}
+svc_cv = GridSearchCV(svc, param_grid = svc_param, cv = kf)
+svc_cv.fit(X_train, y_train)
+
+print('Tuned SVC parameters: {}'.format(svc_cv.best_params_))
+print('Tuned SVC score: {}'.format(svc_cv.best_score_))
+#
+tree = DecisionTreeClassifier()
+params = {'criterion': ['gini', 'entropy'],
+          'max_depth': [None, 5, 10],
+          'min_samples_split': np.arange(2, 11),
+          'min_samples_leaf': np.arange(1, 11)}
+
+tree_cv = GridSearchCV(tree, param_grid = params, cv = kf)
+tree_cv.fit(X_train, y_train)
+
+print('Tuned Decision Tree parameters : {}'.format(tree_cv.best_params_))
+print('Tuned Decision Tree scores : {}'.format(tree_cv.best_score_))
+#
+forest = RandomForestClassifier()
+params = {'n_estimators' : np.arange(10, 101, 10),
+          'random_state': [123]}
+
+forest_cv = GridSearchCV(forest, param_grid = params, cv = kf)
+forest_cv.fit(X_train, y_train)
+
+print('Tuned Random Forest parameters : {}'.format(forest_cv.best_params_))
+print('Tuned Random Forest scores : {}'.format(forest_cv.best_score_))
+#
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+np.random.seed(0)
+
+new_data = comments["Text"]
+target = comments["IsToxic"]
+
+comments_train, comments_test, y_train, y_test = train_test_split(new_data, target,
+                                                                  test_size=0.30, stratify=target, random_state = 42)
+
+vectorizer = TfidfVectorizer(max_features=2500, min_df=8, max_df=0.8)
+vectorizer.fit(comments_train)
+
+x_train = vectorizer.transform(comments_train)
+x_test = vectorizer.transform(comments_test)
+#
+x_train_array = x_train.toarray()
+x_test_array = x_test.toarray()
+#
+# Initialize classifiers
+from sklearn.naive_bayes import GaussianNB
+classifiers = [
+    RandomForestClassifier(n_estimators=200, random_state=42),
+    SVC(C=1.0, kernel='rbf', gamma='scale'),
+    LogisticRegression(solver='lbfgs', max_iter=1000),
+    KNeighborsClassifier(n_neighbors=5),
+    GaussianNB()
+]
+
+
+for classifier in classifiers:
+
+    cross_arr = cross_val_score(classifier, x_train_array, y_train, cv = 4, scoring = "accuracy")
+    print(f"{classifier.__class__.__name__} accuracies of cross: {cross_arr} -----> mean of accuracies : {sum(cross_arr)/len(cross_arr)}")
+#
+for classifier in classifiers:
+    classifier.fit(x_train_array, y_train)
+    y_pred = classifier.predict(x_test_array)
+    accuracy = accuracy_score(y_test, y_pred)
+    print(f"{classifier.__class__.__name__} accuracy: {accuracy}")
+#
+classifiers_name = ["RandomForestClassifier", "SVC", "LogisticRegression", "KNeighborsClassifier", "GaussianNB"]
+
+def classify_string(string):
+
+    for clf, clf_name in zip(classifiers, classifiers_name)  :
+
+        clf.fit(x_train_array, y_train)
+        prediction = clf.predict(vectorizer.transform([string]).toarray())[0]
+
+
+        if prediction == 0:
+            print(clf_name," : NOT TOXIC : ", string)
+
+        else:
+            print(clf_name," :  TOXIC : ", string)
+#
+classify_string("you are a bitch ass pussy nigga")
+#
+classify_string("i have friend and he is black")
+#
+classify_string("i have friend and he is chutiya name lakshman")
+#
+models = {'KNeighborsClassifier':KNeighborsClassifier(n_neighbors = 10),
+          'LogisticRegression':LogisticRegression(penalty = 'l2', C = 10),
+          'SVC':SVC(kernel = 'linear', C = 1.0, gamma = 0.00001, probability=True),
+          'DecisionTreeClassifier':DecisionTreeClassifier(criterion = 'entropy', max_depth = None, min_samples_leaf = 1, min_samples_split = 4),
+          'RandomForestClassifier':RandomForestClassifier(n_estimators = 20)
+         }
+#
+from sklearn.metrics import roc_curve, roc_auc_score
+import matplotlib.pyplot as plt
+
+# Initialize an empty list to store the fpr and tpr values for each model
+combined_fpr = []
+combined_tpr = []
+
+for name, model in models.items():
+    model.fit(X_train, y_train)
+    y_pred_probs = model.predict_proba(X_test)[:, 1]
+
+    fpr, tpr, thresholds = roc_curve(y_test, y_pred_probs)
+    combined_fpr.append(fpr)
+    combined_tpr.append(tpr)
+
+    print('Area Under ROC curve for {} : {:.4f}'.format(name, roc_auc_score(y_test, y_pred_probs)))
+
+# Plot the combined ROC curve
+plt.figure(figsize=(10, 6))
+plt.plot([0, 1], [0, 1], '--k')
+for i in range(len(models)):
+    plt.plot(combined_fpr[i], combined_tpr[i], label=list(models.keys())[i])
+plt.title('Combined ROC curves')
+plt.xlabel('False positive rate')
+plt.ylabel('True positive rate')
+plt.legend()
+plt.show()
+#
+#
+#
