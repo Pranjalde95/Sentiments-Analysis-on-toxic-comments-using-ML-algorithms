@@ -1,0 +1,9 @@
+# Keep text datasets and generated results out of version control.
+*.csv
+*.parquet
+outputs/
+.ipynb_checkpoints/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.venv/
