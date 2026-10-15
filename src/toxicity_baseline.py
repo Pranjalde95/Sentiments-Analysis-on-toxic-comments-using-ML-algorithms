@@ -23,15 +23,24 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 
+def _normalized_text(text: str) -> str:
+    """Normalize only for duplicate detection; retain original text for TF-IDF."""
+    return " ".join(text.split()).casefold()
+
+
 def load_comments(path: str | Path) -> pd.DataFrame:
-    """Read and validate the expected binary classification columns."""
-    data = pd.read_csv(path)
+    """Validate binary labels and remove normalized duplicate texts before splitting.
+
+    Conflicting toxicity labels on normalized-identical text raise an error rather
+    than silently choosing one label. Missing/blank texts are excluded.
+    """
+    raw = pd.read_csv(path)
     required = {"Text", "IsToxic"}
-    missing = required.difference(data.columns)
+    missing = required.difference(raw.columns)
     if missing:
         raise ValueError(f"Missing required dataset column(s): {', '.join(sorted(missing))}")
 
-    data = data.loc[:, ["Text", "IsToxic"]].dropna().copy()
+    data = raw.loc[:, ["Text", "IsToxic"]].dropna().copy()
     data["Text"] = data["Text"].astype(str).str.strip()
     data = data.loc[data["Text"].ne("")].copy()
     data["IsToxic"] = pd.to_numeric(data["IsToxic"], errors="raise")
@@ -39,14 +48,24 @@ def load_comments(path: str | Path) -> pd.DataFrame:
     if labels != {0, 1}:
         raise ValueError(f"IsToxic must have both binary labels 0 and 1; found {sorted(labels)}")
     data["IsToxic"] = data["IsToxic"].astype(int)
-    return data.reset_index(drop=True)
 
+    keys = data["Text"].map(_normalized_text)
+    conflicting = data.groupby(keys)["IsToxic"].nunique().gt(1)
+    if conflicting.any():
+        raise ValueError(
+            f"Conflicting IsToxic labels found for {int(conflicting.sum())} "
+            "normalized-identical comment(s); review labels before deduplication."
+        )
+
+    before_deduplication = len(data)
+    data = data.loc[~keys.duplicated(keep="first")].reset_index(drop=True)
+    data.attrs["input_rows"] = len(raw)
+    data.attrs["filtered_missing_or_blank_rows"] = len(raw) - before_deduplication
+    data.attrs["duplicate_rows_removed"] = before_deduplication - len(data)
+    return data
 
 def build_models(seed: int) -> dict[str, object]:
-    """Classical estimators explored in the historical notebook, with fixed defaults.
-
-    These parameter choices are a *new* baseline, not tuned dissertation settings.
-    """
+    """Fixed *new baseline* settings, not historical dissertation tuning."""
     return {
         "LogisticRegression": LogisticRegression(max_iter=1000, random_state=seed),
         "SVC": SVC(kernel="linear", probability=True, random_state=seed),
@@ -63,13 +82,15 @@ def evaluate_models(
     test_size: float = 0.30,
     folds: int = 5,
 ) -> dict[str, object]:
-    """Fit TF-IDF inside CV folds; evaluate a single held-out test split."""
+    """Fit TF-IDF inside CV folds and evaluate a held-out, aligned test split."""
     if not 0.0 < test_size < 1.0:
         raise ValueError("test_size must be between 0 and 1")
     if folds < 2:
         raise ValueError("folds must be at least 2")
     if not {"Text", "IsToxic"}.issubset(data.columns):
         raise ValueError("Data must include Text and IsToxic columns")
+    if data["Text"].astype(str).map(_normalized_text).duplicated().any():
+        raise ValueError("Duplicate normalized comment texts remain; first use load_comments().")
 
     x_train, x_test, y_train, y_test = train_test_split(
         data["Text"], data["IsToxic"],
@@ -82,13 +103,17 @@ def evaluate_models(
 
     cross_validation = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
     results: dict[str, object] = {
-        "dataset_rows_after_missing_value_filter": len(data),
+        "input_rows": int(data.attrs.get("input_rows", len(data))),
+        "filtered_missing_or_blank_rows": int(data.attrs.get("filtered_missing_or_blank_rows", 0)),
+        "duplicate_rows_removed": int(data.attrs.get("duplicate_rows_removed", 0)),
+        "deduplication": "Trim, collapse whitespace, casefold; conflicting labels rejected",
+        "dataset_rows_after_cleaning_and_deduplication": len(data),
         "train_rows": len(x_train),
         "test_rows": len(x_test),
         "split_seed": seed,
         "test_size_fraction": test_size,
         "cross_validation_folds": folds,
-        "note": "New baseline, not a reproduction of dissertation notebook metrics.",
+        "note": "New comment-level baseline; not a reproduction of dissertation metrics or a video-held-out evaluation.",
         "models": {},
     }
     for name, classifier in build_models(seed).items():

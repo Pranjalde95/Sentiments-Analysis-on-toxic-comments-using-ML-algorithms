@@ -28,7 +28,7 @@ The saved notebook outputs include:
 
 ## Reproducible baseline (separate from the original dissertation)
 
-The optional new script builds a TF-IDF-plus-classifier `Pipeline` for each model, **splits comments into training and held-out testing sets before fitting TF-IDF**, and uses stratified cross-validation on the training set. It reports cross-validation accuracy (mean/standard deviation), held-out accuracy, F1, and ROC-AUC. Hyperparameters are simple fixed defaults rather than the full historical parameter searches.
+The optional new script builds a TF-IDF-plus-classifier `Pipeline` for each model, **removes normalized-identical texts before splitting** (trimming and collapsing whitespace, ignoring case, and rejecting conflicting toxicity labels), then splits comments into training and held-out testing sets before fitting TF-IDF, and uses stratified cross-validation on the training set. It reports cross-validation accuracy (mean/standard deviation), held-out accuracy, F1, and ROC-AUC. Hyperparameters are simple fixed defaults rather than the full historical parameter searches.
 
 Requirements: Python 3.11 recommended; a CSV with `Text` and binary `IsToxic` columns (0 = not toxic, 1 = toxic).
 
@@ -37,7 +37,7 @@ python -m pip install -r requirements.txt
 python src/toxicity_baseline.py --data /path/to/youtoxic_english_1000.csv --output outputs/baseline_metrics.json
 ```
 
-**No dataset is included** in this repository. Obtain the original dataset through an appropriate source and check its terms before use. The repository ignores local CSV files and generated `outputs/` by default. The baseline cannot produce actual study-specific scores until a suitable dataset is supplied and the command is run; it has **not** been run on the dissertation dataset as part of this cleanup.
+**No dataset is included** in this repository. Obtain the original dataset through an appropriate source and check its terms before use. The repository ignores local CSV files and generated `outputs/` by default. GitHub Actions tests use synthetic data only. The baseline has been evaluated separately on a researcher-provided 1,000-comment CSV in October 2026; those new results are being reviewed independently and are not part of the archived dissertation, nor are they committed to this repository.
 
 For a quick code sanity check using **synthetic text only**:
 
@@ -50,7 +50,8 @@ python -m pytest -q tests
 
 - The original notebook is retained as an archival research artifact, **not** an assured end-to-end reproducible or leakage-free evaluation. Its separate `Code_File` contains a transcription typo, and the original data are unavailable in this repo.
 - Toxicity labels reflect a particular dataset and labeling context. Classification mistakes, demographic biases, quotation/context errors, and language variation matter when considering real moderation systems.
-- The dataset, label definitions, representativeness, annotations, and possible duplicate-text overlap require separate inspection before any new quantitative result is asserted.
+- The new baseline excludes case- and whitespace-normalized duplicate texts and flags conflicting binary labels before splitting. It does not remove near-duplicates or ensure that comments from the same video stay in one partition; a held-out-video evaluation would be a separate experiment.
+- The dataset, label definitions, representativeness, annotations, and possible near-duplicate/video overlap require separate inspection before any new quantitative result is asserted.
 - The new baseline is **not** a fairness audit, a deployed moderation product, or a reimplementation of the original thesis experiments. Numerical outputs should be cited only after real data provenance and a fresh evaluation are documented.
 - The notebook includes examples of offensive language in historical testing cells. Review it before presenting it to general audiences.
 

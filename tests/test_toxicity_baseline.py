@@ -37,3 +37,32 @@ def test_rejects_invalid_labels(tmp_path):
     pd.DataFrame({"Text": ["a", "b"], "IsToxic": [0, 2]}).to_csv(p, index=False)
     with pytest.raises(ValueError, match="binary labels"):
         load_comments(p)
+
+def test_removes_case_and_whitespace_duplicates_before_splitting(tmp_path):
+    p = tmp_path / "repeated.csv"
+    d = example_data()
+    repeated = pd.DataFrame({"Text": ["  ABUSIVE  hostile   message sample 0  ", "abusive hostile message sample 0"], "IsToxic": [1, 1]})
+    pd.concat([d, repeated], ignore_index=True).to_csv(p, index=False)
+    clean = load_comments(p)
+    assert len(clean) == 48
+    assert clean.attrs["input_rows"] == 50
+    assert clean.attrs["duplicate_rows_removed"] == 2
+    result = evaluate_models(clean, folds=3)
+    assert result["dataset_rows_after_cleaning_and_deduplication"] == 48
+    assert result["duplicate_rows_removed"] == 2
+
+
+def test_rejects_conflicting_duplicate_labels(tmp_path):
+    p = tmp_path / "conflict.csv"
+    d = example_data()
+    wrong_label = pd.DataFrame({"Text": [" ABUSIVE hostile message sample 0 "], "IsToxic": [0]})
+    pd.concat([d, wrong_label], ignore_index=True).to_csv(p, index=False)
+    with pytest.raises(ValueError, match="Conflicting IsToxic"):
+        load_comments(p)
+
+
+def test_rejects_undetected_duplicates_in_direct_evaluate():
+    d = example_data()
+    d.loc[1, "Text"] = d.loc[0, "Text"].upper()
+    with pytest.raises(ValueError, match="Duplicate normalized"):
+        evaluate_models(d)
